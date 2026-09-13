@@ -1,0 +1,139 @@
+{
+  "name": "pi-vibe-coding",
+  "displayName": "Vibe Coding (pi)",
+  "description": "驱动本机 pi CLI 执行 vibe coding 任务的交互式节点。节点运行期间通过内置本地 HTTP 桥向画布组件提供实时对话与输入交互。内置 ask_user 工具：pi 需要用户输入/确认时调用它，节点挂起等待弹窗回答后继续；pi 回合结束且无提问时自动置成功（绿灯）。点「中止」或 pi 异常退出或超时（默认 48 小时）则失败（红灯）。pi 会话持久化在 <workdir>/.pi-vibe/sessions/<节点ID>/ 并按 执行实例 × 节点 隔离：同一执行的同一节点重入（execution continue / 重跑）自动续聊，其他节点（即使共用 workdir）与全新运行都自动开启新会话。仅支持 local 执行器。⚠️ 多个本节点并行运行同一 workdir 时会话已隔离，但 pi 进程并发改同一工作树仍可能互相干扰，并行场景建议为每个节点配置独立子目录（如 project/backend、project/frontend）。",
+  "version": "1.0.3",
+  "author": "flowx-team",
+  "tags": [
+    "vibe-coding",
+    "pi",
+    "interactive",
+    "agent"
+  ],
+  "icon": "🤖",
+  "language": "python",
+  "entry": "main.py",
+  "parameters": [
+    {
+      "name": "task",
+      "type": "string",
+      "description": "交给 pi 执行的任务描述（自然语言）。仅首次运行时作为首个 prompt 发送；节点重入续聊时不重复发送，由用户在聊天弹窗中继续输入",
+      "required": true
+    },
+    {
+      "name": "workdir",
+      "type": "string",
+      "description": "pi 的工作目录（代码工作区绝对路径）。pi 会话与节点状态持久化在该目录的 .pi-vibe/ 子目录中（按节点 ID 隔离），是重入续聊与 git 分支检测的依据，同一节点的多次运行请保持同一 workdir。多个节点可共用同一 workdir（会话互不干扰），但并行节点同时改同一工作树仍可能冲突，并行场景建议各用独立子目录",
+      "required": true
+    },
+    {
+      "name": "model",
+      "type": "string",
+      "description": "可选，透传给 pi 的 --model 参数（如 provider/model-id）。留空使用 pi 系统默认模型",
+      "required": false,
+      "default": ""
+    },
+    {
+      "name": "timeout",
+      "type": "string",
+      "description": "节点整体超时秒数，默认 172800（48 小时），0 表示不限。等待用户回答提问的时间也计入；超时按失败处理（红灯）",
+      "required": false,
+      "default": "172800"
+    },
+    {
+      "name": "bridge_port",
+      "type": "string",
+      "description": "本地交互桥监听端口，0（默认）表示由内核自动分配空闲端口，可安全并行运行多个节点；仅端口冲突排查时才需要手动指定。桥绑定 127.0.0.1，仅本机浏览器可达",
+      "required": false,
+      "default": "0"
+    },
+    {
+      "name": "auto_finish",
+      "type": "string",
+      "description": "回合结束自动完成：true（默认）= pi 回合完全结束且无待回答提问时自动置成功（绿灯）放行下游；pi 需要提问/确认时会调用内置 ask_user 工具挂起等待弹窗回答（未调工具但以问号结尾也会兜底的等待回答）。false = 旧行为，始终等待人工点「完成任务」",
+      "required": false,
+      "default": "true"
+    }
+  ],
+  "env": {
+    "VIBE_TASK": "{{ Param.task }}",
+    "VIBE_WORKDIR": "{{ Param.workdir }}",
+    "VIBE_MODEL": "{{ Param.model }}",
+    "VIBE_TIMEOUT": "{{ Param.timeout }}",
+    "VIBE_BRIDGE_PORT": "{{ Param.bridge_port }}",
+    "VIBE_AUTO_FINISH": "{{ Param.auto_finish }}"
+  },
+  "outputs": [
+    {
+      "name": "status",
+      "type": "string",
+      "description": "结束方式：success（用户点完成或 auto_finish 自动完成）/ aborted（用户中止）/ timeout / error"
+    },
+    {
+      "name": "summary",
+      "type": "string",
+      "description": "最后一条助手回复文本（截断 2000 字符），供下游节点接线"
+    },
+    {
+      "name": "session_id",
+      "type": "string",
+      "description": "pi 会话 ID"
+    },
+    {
+      "name": "session_dir",
+      "type": "string",
+      "description": "pi 会话存储目录（<workdir>/.pi-vibe/sessions/<节点ID>）"
+    },
+    {
+      "name": "workdir",
+      "type": "string",
+      "description": "pi 工作目录"
+    },
+    {
+      "name": "branch",
+      "type": "string",
+      "description": "工作区 git 分支（非 git 仓库为空）"
+    },
+    {
+      "name": "resume_command",
+      "type": "string",
+      "description": "终端恢复会话命令：cd <workdir> && pi --session-dir <session_dir> -c（必须先 cd 进 workdir，pi -c 按当前目录匹配会话，否则匹配不到会开新空会话）"
+    },
+    {
+      "name": "turns",
+      "type": "string",
+      "description": "对话轮数"
+    },
+    {
+      "name": "tool_calls",
+      "type": "string",
+      "description": "工具调用次数"
+    },
+    {
+      "name": "transcript",
+      "type": "string",
+      "description": "压缩对话记录 JSON（单条最多 5000 字符，最多保留最后 100 条，供画布组件只读回放）"
+    }
+  ],
+  "extract": {
+    "type": "codec-block"
+  },
+  "mock": {
+    "enabled": true,
+    "entry": "mock.py"
+  },
+  "ui": {
+    "entry": "ui/node-widget.js",
+    "width": 340,
+    "height": 380,
+    "collapsed": false,
+    "apiVersion": 1
+  },
+  "timeout": 86400,
+  "executor": {
+    "supportedTypes": [
+      "local"
+    ],
+    "preferredType": "local"
+  }
+}
